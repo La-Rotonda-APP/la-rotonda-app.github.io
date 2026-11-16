@@ -49,6 +49,7 @@ main{min-width:0}
 .btn:hover{filter:brightness(.97)}
 .btn.pri{background:var(--ac);color:#fff}.btn.dark{background:var(--ol);color:#fff}.btn.bad{background:#F6E3DE;color:var(--bad)}
 .btn.wa{background:#25D366;color:#fff}
+a.btn{text-decoration:none;display:inline-block}
 .btn.sm{padding:5px 10px;font-size:12px;border-radius:8px}
 .btn:disabled{opacity:.5;cursor:default}
 .bar{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:14px}
@@ -160,6 +161,7 @@ table.l .acts{white-space:nowrap;text-align:right}
 .doc.page .d-foot{position:absolute;left:52px;right:52px;bottom:28px;margin:0}
 .doc .d-foot b{color:#374151;font-weight:600}
 #printArea{display:none}
+.mobonly{display:none}
 @media print{
   @page{size:letter;margin:0}
   body.printing>*:not(#printArea){display:none!important}
@@ -171,6 +173,8 @@ table.l .acts{white-space:nowrap;text-align:right}
   #app{grid-template-columns:1fr}
   .nav{position:sticky;top:0;height:auto;flex-direction:row;overflow-x:auto;padding:8px;z-index:10;gap:4px}
   .nav .brand,.nav .me{display:none}
+  .mobonly{display:inline-block}
+  .top .st{display:none}
   #navBtns{display:flex;gap:4px}
   .nav button{width:auto;flex:none;padding:8px 10px;font-size:12px}
   .kpis{grid-template-columns:1fr 1fr}.kpi .v{font-size:15px}
@@ -239,7 +243,7 @@ table.l .acts{white-space:nowrap;text-align:right}
     <div class="me"><b id="meName"></b><span id="meRol"></span><br><a href="#" id="logout" style="color:#D9BF8C">Cerrar sesión</a></div>
   </aside>
   <main>
-    <div class="top"><h2 id="vTitle">Panel</h2><div style="display:flex;gap:8px;align-items:center"><span class="st" id="sync"></span><button class="btn sm" id="reload">↻ Actualizar</button></div></div>
+    <div class="top"><h2 id="vTitle">Panel</h2><div style="display:flex;gap:8px;align-items:center"><span id="bell" style="position:relative;cursor:pointer;font-size:18px;display:none" onclick="VIEW='visitas';render()"></span><span class="st" id="sync"></span><button class="btn sm" id="reload">↻ Actualizar</button><button class="btn sm mobonly" id="logout2" title="Cerrar sesión">Salir</button></div></div>
     <div id="view"></div>
   </main>
 </div>
@@ -297,9 +301,9 @@ function amountWords(v,cur){v=Math.round((+v||0)*100);const e=Math.floor(v/100),
    API
    ========================================================= */
 let DB=null,ME=null;
-const TMAP={Casas:"casas",Cargos:"cargos",Ingresos:"ingresos",Gastos:"gastos",Empleados:"empleados",EmpEventos:"emp_eventos",Mantenimiento:"mantenimiento",Comunicaciones:"comunicaciones",Reservas:"reservas",Incidencias:"incidencias"};
+const TMAP={Casas:"casas",Cargos:"cargos",Ingresos:"ingresos",Gastos:"gastos",Empleados:"empleados",EmpEventos:"emp_eventos",Mantenimiento:"mantenimiento",Comunicaciones:"comunicaciones",Reservas:"reservas",Incidencias:"incidencias",Visitas:"visitas",Invitaciones:"invitaciones",Notificaciones:"notificaciones"};
 const TABLES=Object.keys(TMAP);
-const NULLABLE=new Set(["fecha","fpago","vence","ingreso","fecha_fin","proxima","cierre","total","balance","subtotal","itbis","cuota","monto","salario","costo","deposito","personas","factura_id","empleado_id","mantenimiento_id","vence"]);
+const NULLABLE=new Set(["fecha","fpago","vence","ingreso","fecha_fin","proxima","cierre","total","balance","subtotal","itbis","cuota","monto","salario","costo","deposito","personas","factura_id","empleado_id","mantenimiento_id","vence","entrada","salida","respondido_ts","invitacion_id","hora_desde","hora_hasta","desde","hasta","ref_id"]);
 const SEQS=["IN-","EG-","FC-","CM-","H-","INC-"];
 const toEmail=u=>(u.includes("@")?u:`${u}@${DOM}`).trim().toLowerCase();
 function trErr(e){const m=String(e&&(e.message||e.error_description||e.msg)||e||"Error");
@@ -308,7 +312,7 @@ function trErr(e){const m=String(e&&(e.message||e.error_description||e.msg)||e||
   if(/row-level security|permission denied/i.test(m))return "No tienes permiso para esta acción.";
   if(/duplicate key/i.test(m))return "Ya existe un registro con ese dato.";
   return m}
-function normRow(r){const o={};for(const k in r){let v=r[k];if(v===null||v===undefined)v="";if((k==="desde"||k==="hasta")&&typeof v==="string")v=v.slice(0,5);o[k]=v}return o}
+function normRow(r){const o={};for(const k in r){let v=r[k];if(v===null||v===undefined)v="";if((k==="hora_desde"||k==="hora_hasta"||((k==="desde"||k==="hasta")&&/^\d\d:/.test(v)))&&typeof v==="string")v=v.slice(0,5);o[k]=v}return o}
 function cleanRow(r){const o={};for(const k in r){let v=r[k];if(v===undefined)continue;if(k==="id"&&!v)continue;if(NULLABLE.has(k)&&(v===""||v===null))v=null;o[k]=v}delete o.usuario;delete o.ts;return o}
 async function fetchAll(table){let out=[],from=0;for(;;){const {data,error}=await sb.from(table).select("*").range(from,from+999);if(error)throw error;out=out.concat(data);if(data.length<1000)break;from+=1000}return out}
 async function invokeFn(body){const {data,error}=await sb.functions.invoke("usuarios",{body});
@@ -322,10 +326,16 @@ async function api(action,p={}){
         const {data,error}=await sb.from("perfiles").select("*").eq("id",user.id).maybeSingle();if(error)throw error;
         if(!data)throw new Error("Tu usuario no tiene perfil asignado.");if(!data.activo)throw new Error("Tu usuario está desactivado.");return {user:userRow(data)}}
       case "load":{const d={};const tabs=Object.entries(TMAP);
-        const res=await Promise.all(tabs.map(([k,t])=>fetchAll(t)));tabs.forEach(([k],i)=>d[k]=res[i].map(normRow));
+        const d45=addDays(today(),-45),d30=addDays(today(),-30);
+        const special={Visitas:()=>sb.from("visitas").select("*").or(`estado.in.("En espera",Adentro),fecha.gte.${d45}`).order("ts",{ascending:false}).limit(3000).then(r=>{if(r.error)throw r.error;return r.data}),
+          Invitaciones:()=>sb.from("invitaciones").select("*").or(`estado.eq.Activa,hasta.gte.${d30}`).limit(2000).then(r=>{if(r.error)throw r.error;return r.data}),
+          Notificaciones:()=>sb.from("notificaciones").select("*").order("ts",{ascending:false}).limit(50).then(r=>{if(r.error)throw r.error;return r.data})};
+        const skip=ME&&ME.rol==="seguridad"?new Set(["Cargos","Ingresos","Gastos","Empleados","EmpEventos","Mantenimiento","Comunicaciones","Reservas","Notificaciones","Casas"]):new Set();
+        const res=await Promise.all(tabs.map(([k,t])=>skip.has(k)?Promise.resolve([]):(special[k]?special[k]():fetchAll(t))));tabs.forEach(([k],i)=>d[k]=res[i].map(normRow));
         const {data:cfg,error:e1}=await sb.from("config").select("*");if(e1)throw e1;d.cfg={};cfg.forEach(r=>d.cfg[r.clave]=r.valor);
         if(ME&&ME.rol!=="propietario"){const {data:se}=await sb.from("series").select("*");(se||[]).forEach(r=>d.cfg["seq_"+r.prefijo]=String(r.siguiente))}
         if(ME&&ME.rol!=="propietario"&&ME.rol!=="operador"&&ME.rol!=="consulta"){const {data:us}=await sb.from("perfiles").select("*").order("usuario");d.Usuarios=(us||[]).map(userRow)}
+        if(ME&&ME.rol==="seguridad"){const {data:cg}=await sb.rpc("casas_garita");d.Casas=(cg||[]).map(normRow)}
         if(ME&&ME.rol==="propietario"){const {data:cp}=await sb.rpc("casas_publicas");const mine=new Set(d.Casas.map(c=>c.id));(cp||[]).forEach(c=>{if(!mine.has(c.id))d.Casas.push(normRow(Object.assign({telefono:"",email:"",notas:""},c)))});
           const {data:oc}=await sb.rpc("reservas_ocupadas");const own=new Set(d.Reservas.map(r=>r.id));
           (oc||[]).forEach(r=>{if(!own.has(r.id))d.Reservas.push(normRow(Object.assign({casa:"",evento:"",personas:"",deposito:"",notas:""},r)))})}
@@ -356,8 +366,8 @@ function normalize(){TABLES.forEach(t=>DB[t]=DB[t]||[]);DB.Usuarios=DB.Usuarios|
 function putLocal(t,row){const a=DB[t],i=a.findIndex(x=>x.id===row.id);if(i>-1)a[i]=Object.assign({},a[i],row);else a.push(row);LS.set("lr_cache",DB)}
 async function save(t,row){const s=await api("save",{table:t,row});putLocal(t,s);return s}
 async function remove(t,id){const s=await api("remove",{table:t,id});if(s.deleted)DB[t]=DB[t].filter(x=>x.id!==id);else putLocal(t,s);LS.set("lr_cache",DB);return s}
-const can={w:()=>ME&&["superadmin","admin","operador"].includes(ME.rol),a:()=>ME&&["superadmin","admin"].includes(ME.rol),s:()=>ME&&ME.rol==="superadmin",p:()=>ME&&ME.rol==="propietario"};
-const ROL_TXT={superadmin:"super admin",admin:"admin",operador:"operador",consulta:"consulta",propietario:"propietario"};
+const can={g:()=>ME&&ME.rol==="seguridad",w:()=>ME&&["superadmin","admin","operador"].includes(ME.rol),a:()=>ME&&["superadmin","admin"].includes(ME.rol),s:()=>ME&&ME.rol==="superadmin",p:()=>ME&&ME.rol==="propietario"};
+const ROL_TXT={superadmin:"super admin",admin:"admin",operador:"operador",consulta:"consulta",propietario:"propietario",seguridad:"seguridad (garita)"};
 
 /* =========================================================
    CÁLCULOS
@@ -547,10 +557,11 @@ async function wrap(fn){try{return await fn()}catch(e){toast(e.message||String(e
 /* =========================================================
    NAVEGACIÓN
    ========================================================= */
-const VIEWS=[["panel","◧","Panel"],["ingresos","↓","Ingresos"],["gastos","↑","Gastos"],["estados","≡","Estados de cuenta"],["casas","⌂","Casas y cuotas"],["mant","⚒","Mantenimiento"],["incid","⚑","Incidencias"],["empleados","☺","Empleados"],["comms","✉","Comunicaciones"],["reservas","▦","Reservas"],["ajustes","⚙","Ajustes"]];
+const VIEWS=[["panel","◧","Panel"],["ingresos","↓","Ingresos"],["gastos","↑","Gastos"],["estados","≡","Estados de cuenta"],["casas","⌂","Casas y cuotas"],["mant","⚒","Mantenimiento"],["incid","⚑","Incidencias"],["visit","⛨","Visitantes"],["empleados","☺","Empleados"],["comms","✉","Comunicaciones"],["reservas","▦","Reservas"],["ajustes","⚙","Ajustes"]];
 let VIEW=LS.get("lr_view","panel");const ST={};
-const OWNER_VIEWS=[["micuenta","☖","Mi cuenta"],["panel","◧","Panel general"],["estados","≡","Estados de cuenta"],["ingresos","↓","Mis recibos"],["incid","⚑","Incidencias"],["comms","✉","Avisos"],["reservas","▦","Reservas"]];
-const views=()=>can.p()?OWNER_VIEWS:VIEWS;
+const GUARD_VIEWS=[["visit","⌂","Garita"],["vhist","☰","Historial"],["incid","⚑","Incidencias"]];
+const OWNER_VIEWS=[["micuenta","☖","Mi cuenta"],["visitas","⛨","Visitas"],["panel","◧","Panel general"],["estados","≡","Estados de cuenta"],["ingresos","↓","Mis recibos"],["incid","⚑","Incidencias"],["comms","✉","Avisos"],["reservas","▦","Reservas"]];
+const views=()=>can.g()?GUARD_VIEWS:can.p()?OWNER_VIEWS:VIEWS;
 function drawNav(){$("navBtns").innerHTML=views().map(([k,i,t])=>`<button data-v="${k}" class="${VIEW===k?"on":""}"><span class="ic">${i}</span>${t}</button>`).join("")}
 $("navBtns").onclick=e=>{const b=e.target.closest("button");if(!b)return;VIEW=b.dataset.v;LS.set("lr_view",VIEW);drawNav();render();window.scrollTo(0,0)};
 function render(){if(!DB)return;if(!views().some(x=>x[0]===VIEW))VIEW=views()[0][0];drawNav();const v=views().find(x=>x[0]===VIEW);$("vTitle").textContent=v[2];
@@ -585,6 +596,7 @@ R.panel=()=>{
    <div class="kpi"><label>Deuda del mes</label><div class="v" style="color:var(--warn)">${money(dMes,cur)}</div><small>Por vencer · ${mor.length-nAtr} casa(s)</small></div>
    <div class="kpi"><label>Deuda en atraso</label><div class="v red">${money(dAtr,cur)}</div><small>Vencida · ${nAtr} casa(s)</small></div>
    <div class="kpi"><label>Por pagar</label><div class="v">${money(cxp,cur)}</div><small>${facturasPend().length} factura(s)</small></div>
+   ${can.p()?"":`<div class="kpi" style="cursor:pointer" onclick="VIEW='visit';render()"><label>Visitantes adentro</label><div class="v">${DB.Visitas.filter(v=>v.estado==="Adentro").length}</div><small>${DB.Visitas.filter(v=>v.estado==="En espera").length} en espera</small></div>`}
    <div class="kpi"><label>Incidencias abiertas</label><div class="v">${DB.Incidencias.filter(i=>i.estado==="Abierta"||i.estado==="En proceso").length}</div></div>
    <div class="kpi"><label>Casas sin atraso</label><div class="v">${cts.length-nAtr} / ${cts.length}</div><small>${cts.length-mor.length} sin ninguna deuda</small></div>
   </div>
@@ -616,7 +628,8 @@ R.micuenta=()=>{const casa=ME.casa,c=casaObj(casa)||{casa},ct=cuenta(casa),cur=C
   const pagos=vivos("Ingresos").filter(i=>String(i.casa)===String(casa)).sort((a,b)=>(b.fecha+b.ts).localeCompare(a.fecha+a.ts));
   const avisos=DB.Comunicaciones.slice().sort((a,b)=>(b.fecha+b.ts).localeCompare(a.fecha+a.ts)).slice(0,4);
   const mres=DB.Reservas.filter(r=>String(r.casa)===String(casa)&&r.fecha>=today()&&r.estado!=="Cancelada");
-  return `<div class="card" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px"><div><div class="muted" style="font-size:12px">Casa ${esc(casa)}</div><div style="font-size:18px;font-weight:600">${esc(c.propietario||ME.nombre)}</div></div>
+  const pv=DB.Visitas.filter(v=>String(v.casa)===String(casa)&&v.autorizacion==="Pendiente");
+  return `${pv.length?`<div class="card" style="border:2px solid var(--warn);background:#FFFBF2;cursor:pointer" onclick="VIEW='visitas';render()"><b>🔔 ${pv.length===1?esc(pv[0].nombre)+" está esperando en la garita":pv.length+" visitas esperando en la garita"}</b><div class="muted">Toca para autorizar o rechazar</div></div>`:""}<div class="card" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px"><div><div class="muted" style="font-size:12px">Casa ${esc(casa)}</div><div style="font-size:18px;font-weight:600">${esc(c.propietario||ME.nombre)}</div></div>
    <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn dark" onclick="verEstadoCasa('${esc(casa)}')">Ver estado de cuenta</button><button class="btn" onclick="VIEW='reservas';render()">Reservar área común</button><button class="btn" onclick="formIncidencia()">Reportar incidencia</button></div></div>
   <div class="kpis"><div class="kpi ${ct.saldo>0.004?"":"dk"}"><label>${ct.saldo>0.004?"Total adeudado":"Estás al día"}</label><div class="v">${money(Math.max(0,ct.saldo),cur)}</div><small>${sitBadge(ct)}</small>${ct.favor?`<small> Saldo a favor ${money(ct.favor,cur)}</small>`:""}</div>
    <div class="kpi"><label>Deuda del mes</label><div class="v" style="color:var(--warn)">${money(ct.mes,cur)}</div><small>Por vencer</small></div>
@@ -902,6 +915,157 @@ async function verIncidencia(id){const i=DB.Incidencias.find(x=>x.id===id);if(!i
   if($("i_del"))$("i_del").onclick=()=>wrap(async()=>{if(!confirmBox("¿Eliminar la incidencia?"))return;await remove("Incidencias",i.id);closeModal();render()})}
 
 /* =========================================================
+   VISITANTES (garita)
+   ========================================================= */
+const TIPOS_V=["Visita","Delivery","Servicio técnico","Personal doméstico","Taxi / Uber","Proveedor","Otro"];
+const can_g=()=>ME&&["superadmin","admin","operador","seguridad"].includes(ME.rol);
+ST.vis={tab:"garita"};ST.vh={r:"hoy",q:"",casa:"",tipo:"",d1:"",d2:"",rows:null};
+function hhmm(ts){if(!ts)return"";const d=new Date(ts);return d.toLocaleTimeString("es-DO",{hour:"numeric",minute:"2-digit"})}
+function durac(a,b){if(!a)return"";const m=Math.round(((b?new Date(b):new Date())-new Date(a))/60000);return m<60?`${m} min`:`${Math.floor(m/60)} h ${m%60} min`}
+const casaG=c=>(DB.Casas.find(x=>String(x.casa)===String(c))||{});
+const casaTxt=c=>c?`Casa ${esc(c)}`:"Administración / áreas comunes";
+const autBadge=a=>a==="Pendiente"?badge("Esperando respuesta","warn"):a==="Autorizada"?badge("Autorizada por la casa","ok"):a==="Rechazada"?badge("Rechazada por la casa","bad"):a==="Pre-autorizada"?badge("Pre-autorizada ✓","ok"):"";
+const tipoBadge=t=>badge(t,t==="Delivery"?"warn":t==="Servicio técnico"||t==="Proveedor"?"ac":t==="Personal doméstico"?"ok":"");
+function invValida(v){const t=today();if(v.estado!=="Activa")return[false,v.estado==="Usada"?"Esta invitación ya fue usada.":"Esta invitación fue cancelada."];
+  if(t<v.desde)return[false,`Es válida a partir del ${fd(v.desde)}.`];if(t>v.hasta)return[false,`Venció el ${fd(v.hasta)}.`];
+  const now=new Date().toTimeString().slice(0,5);if(v.hora_desde&&v.hora_hasta&&(now<v.hora_desde||now>v.hora_hasta))return["hora",`Fuera del horario autorizado (${v.hora_desde} a ${v.hora_hasta}).`];return[true,""]}
+function waVisita(v,consulta){const c=casaG(v.casa);if(!c.telefono)return"";
+  const t=`*${C().nombre} · Garita*\n${v.nombre} (${v.tipo})${v.personas>1?` + ${v.personas-1}`:""} ${consulta?"está en la garita y quiere entrar a su casa. ¿Lo autoriza? También puede responder en la app.":"acaba de entrar a su casa."}${v.placa?`\nPlaca: ${v.placa}`:""}\nHora: ${hhmm(v.entrada||v.ts||new Date())}`;
+  return waLink(c.telefono,t)}
+R.visit=()=>{const V_=DB.Visitas,t=today();
+  const esp=V_.filter(v=>v.estado==="En espera").sort((a,b)=>a.ts.localeCompare(b.ts));
+  const ad=V_.filter(v=>v.estado==="Adentro").sort((a,b)=>String(b.entrada).localeCompare(String(a.entrada)));
+  const hoy=V_.filter(v=>v.fecha===t&&(v.estado==="Adentro"||v.estado==="Salió")).length;
+  const usadasHoy=new Set(V_.filter(v=>v.fecha===t&&v.invitacion_id).map(v=>v.invitacion_id));
+  const inv=DB.Invitaciones.filter(i=>invValida(i)[0]!==false&&!usadasHoy.has(i.id));
+  const tabs=!can.g()?`<div class="tabs"><button class="on">Garita</button><button onclick="VIEW='vhist';render()">Historial</button></div>`:"";
+  const card=(v,btns)=>`<div class="card" style="padding:12px 14px;margin-bottom:10px"><div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start;flex-wrap:wrap">
+    <div><b style="font-size:14px">${esc(v.nombre)}</b>${v.personas>1?` <span class="muted">+${v.personas-1}</span>`:""}<div class="muted" style="font-size:12px">${casaTxt(v.casa)} · ${v.estado==="Adentro"?"entró "+hhmm(v.entrada):"llegó "+hhmm(v.ts)}${v.placa?" · placa "+esc(v.placa):""}${v.cedula?" · céd. "+esc(v.cedula):""}</div>
+    <div style="margin-top:6px;display:flex;gap:5px;flex-wrap:wrap">${tipoBadge(v.tipo)} ${autBadge(v.autorizacion)}</div></div><div style="display:flex;gap:6px;flex-wrap:wrap">${btns}</div></div></div>`;
+  const wa=(v,c)=>{const l=waVisita(v,c);return l?`<a class="btn sm wa" target="_blank" href="${l}">WhatsApp</a>`:""};
+  return `${tabs}<div class="kpis"><div class="kpi dk"><label>Adentro ahora</label><div class="v">${ad.reduce((s,v)=>s+(+v.personas||1),0)}</div><small style="color:#D9BF8C">${ad.length} registro(s)</small></div>
+   <div class="kpi"><label>En espera</label><div class="v">${esp.length}</div></div><div class="kpi"><label>Entradas hoy</label><div class="v">${hoy}</div></div><div class="kpi"><label>Esperados hoy</label><div class="v">${inv.length}</div></div></div>
+  <div class="grid g2" style="margin-bottom:6px"><button class="btn pri" style="padding:16px;font-size:15px" onclick="formVisita()">＋ Registrar entrada</button><button class="btn" style="padding:16px;font-size:15px" onclick="scanInvitacion()">⌁ Invitación (QR o código)</button></div>
+  ${esp.length?`<div class="sec">En espera de autorización</div>${esp.map(v=>card(v,`${v.autorizacion!=="Rechazada"?`<button class="btn sm dark" onclick="estVisita('${v.id}','Adentro')">Dar entrada</button>`:""}<button class="btn sm" onclick="estVisita('${v.id}','No entró')">No entró</button>${wa(v,1)}`)).join("")}`:""}
+  <div class="sec">Adentro ahora</div>${ad.map(v=>card(v,`<button class="btn sm dark" onclick="estVisita('${v.id}','Salió')">Salida</button>${wa(v,0)}`)).join("")||`<div class="card empty">Nadie adentro en este momento</div>`}
+  ${inv.length?`<div class="sec">Esperados hoy (invitaciones)</div>${inv.map(i=>`<div class="card" style="padding:12px 14px;margin-bottom:10px;display:flex;justify-content:space-between;gap:10px;align-items:center;flex-wrap:wrap"><div><b>${esc(i.nombre)}</b>${i.personas>1?` <span class="muted">+${i.personas-1}</span>`:""}<div class="muted" style="font-size:12px">Casa ${esc(i.casa)}${i.hora_desde?` · ${i.hora_desde} a ${i.hora_hasta}`:""}${i.placa?" · placa "+esc(i.placa):""}${i.frecuente?" · frecuente":""}</div></div><button class="btn sm dark" onclick="entradaInv('${i.id}')">Dar entrada</button></div>`).join("")}`:""}`};
+A.visit=()=>visPoll();
+async function estVisita(id,est){if((est==="No entró")&&!confirmBox("¿Marcar que no entró?"))return;
+  await wrap(async()=>{await save("Visitas",{id,estado:est});toast(est==="Salió"?"Salida registrada":est==="Adentro"?"Entrada registrada":"Actualizado");render()})}
+function formVisita(pre){pre=pre||{};const o=Object.assign({tipo:"Visita",personas:1},pre);
+  const notif=(C().notificar_entradas||"Sí")==="Sí";
+  openModal(pre.invitacion_id?"Entrada con invitación":"Registrar entrada",`
+  <div class="sec" style="margin-top:0">Tipo de visita</div><div style="display:flex;flex-wrap:wrap;gap:6px" id="v_tipos">${TIPOS_V.map(t=>`<button class="btn sm ${t===o.tipo?"dark":""}" data-t="${t}">${t}</button>`).join("")}</div>
+  <div class="fg" style="margin-top:10px">${FS("Casa que visita","v_casa",[["","Administración / áreas comunes"]].concat(DB.Casas.filter(c=>c.estado!=="Inactiva").map(c=>[c.casa,`Casa ${c.casa} · ${c.propietario||""}`])),o.casa||"","w2")}
+   ${F("Cédula","v_ced",o.cedula,"text","inputmode='numeric' placeholder='001-0000000-0'")}${F("Nombre del visitante","v_nom",o.nombre)}${F("Placa","v_pla",o.placa,"text","autocapitalize='characters'")}${F("Personas","v_per",o.personas,"number","min=1")}${F("Motivo / nota","v_mot",o.motivo,"text","","w2")}</div>
+  <div id="v_prev" class="muted" style="font-size:12px;min-height:14px"></div>
+  ${pre.invitacion_id?`<div class="info">Pre-autorizada por la casa ${esc(o.casa)} con la invitación ${esc(pre.codigo||"")}.</div>`:`
+  <label style="display:flex;gap:8px;align-items:center;font-size:13px;margin:10px 0 6px"><input type="checkbox" id="v_con"> Consultar al propietario antes de dejar entrar (por la app)</label>`}
+  <label style="display:flex;gap:8px;align-items:center;font-size:13px;margin:6px 0"><input type="checkbox" id="v_not" ${notif?"checked":""}> Notificar al propietario por la app</label>`,
+  `<button class="btn" onclick="closeModal()">Cancelar</button><button class="btn pri" id="v_sv">Registrar entrada</button>`);
+  let tipo=o.tipo;$("v_tipos").onclick=e=>{const b=e.target.closest("[data-t]");if(!b)return;tipo=b.dataset.t;[...$("v_tipos").children].forEach(x=>x.classList.toggle("dark",x===b))};
+  if($("v_con"))$("v_con").onchange=e=>{$("v_sv").textContent=e.target.checked?"Enviar consulta y esperar":"Registrar entrada"};
+  $("v_ced").onchange=async()=>{const c=V("v_ced");if(c.length<5||V("v_nom"))return;
+    const p=DB.Visitas.find(v=>v.cedula===c)||(await sb.from("visitas").select("nombre,placa,casa,tipo").eq("cedula",c).order("ts",{ascending:false}).limit(1)).data?.[0];
+    if(p){$("v_nom").value=p.nombre||"";if(!V("v_pla"))$("v_pla").value=p.placa||"";$("v_prev").textContent=`Visitante conocido: última vez a ${p.casa?"casa "+p.casa:"administración"} (${p.tipo}).`}};
+  $("v_sv").onclick=()=>wrap(async()=>{if(!V("v_nom"))throw new Error("Escribe el nombre del visitante.");const con=$("v_con")&&$("v_con").checked;if(con&&!V("v_casa"))throw new Error("Para consultar, elige la casa.");
+    const row={fecha:today(),tipo,casa:V("v_casa"),nombre:V("v_nom"),cedula:V("v_ced"),placa:V("v_pla").toUpperCase(),personas:Math.max(1,parseInt(V("v_per"))||1),motivo:V("v_mot"),
+      invitacion_id:pre.invitacion_id||"",estado:con?"En espera":"Adentro",autorizacion:pre.invitacion_id?"Pre-autorizada":con?"Pendiente":"No consultada",notificar:$("v_not").checked};
+    const s=await save("Visitas",row);if(pre.invitacion_id){const iv=DB.Invitaciones.find(x=>x.id===pre.invitacion_id);if(iv&&!iv.frecuente)iv.estado="Usada"}
+    const l=waVisita(s,con);
+    openModal(con?"Consulta enviada":"Entrada registrada",`<div class="info" style="font-size:14px">${con?`Se envió la consulta a la casa ${esc(s.casa)} por la app. Cuando respondan, verás "Autorizada" o "Rechazada" en la lista <b>En espera</b>.`:`<b>${esc(s.nombre)}</b> entró a las ${hhmm(s.entrada)} · ${casaTxt(s.casa)}.`}</div>
+      ${l?`<p style="font-size:13px">También puedes avisar por WhatsApp${con?" para que respondan más rápido":""}:</p><a class="btn wa" style="display:inline-block" target="_blank" href="${l}">Avisar por WhatsApp</a>`:`<p class="muted" style="font-size:12px">${s.casa?"La casa no tiene teléfono registrado para WhatsApp.":""}</p>`}`,
+      `<button class="btn pri" onclick="closeModal();render()">Listo</button>`);render()})}
+function entradaInv(id){const i=DB.Invitaciones.find(x=>x.id===id);if(!i)return;const[ok,msg]=invValida(i);
+  if(ok!==true&&!confirmBox(msg+" ¿Dar entrada de todos modos?"))return;
+  formVisita({invitacion_id:i.id,codigo:i.codigo,casa:i.casa,nombre:i.nombre,personas:i.personas||1,placa:i.placa,motivo:i.motivo,tipo:"Visita"})}
+let _scan=null;
+function loadScript(src){return new Promise((res,rej)=>{if(document.querySelector(`script[src="${src}"]`))return res();const s=document.createElement("script");s.src=src;s.onload=res;s.onerror=()=>rej(new Error("No se pudo cargar el lector de QR."));document.head.appendChild(s)})}
+function stopScan(){if(_scan){_scan.stop=true;(_scan.stream?.getTracks()||[]).forEach(t=>t.stop());_scan=null}}
+async function scanInvitacion(){
+  openModal("Invitación",`<div class="f"><label>Código de invitación</label><div style="display:flex;gap:8px"><input id="q_code" placeholder="INV-XXXXX" autocapitalize="characters" style="text-transform:uppercase"><button class="btn pri" id="q_go">Buscar</button></div></div>
+   <div style="margin-top:12px"><button class="btn" id="q_cam" style="width:100%">📷 Escanear QR con la cámara</button></div><div id="q_vid" style="margin-top:10px"></div><div id="q_res"></div>`,"");
+  const $mclose=$("mclose"),oc=$mclose.onclick;$mclose.onclick=()=>{stopScan();$mclose.onclick=oc;closeModal()};
+  const buscar=async code=>{code=String(code||"").trim().toUpperCase();if(!code)return;if(!code.startsWith("INV-"))code="INV-"+code.replace(/^INV/,"");stopScan();$("q_vid").innerHTML="";
+    let i=DB.Invitaciones.find(x=>x.codigo===code);if(!i){const {data}=await sb.from("invitaciones").select("*").eq("codigo",code).maybeSingle();if(data){i=normRow(data);DB.Invitaciones.push(i)}}
+    if(!i){$("q_res").innerHTML=`<div class="info red" style="margin-top:12px">No existe una invitación con el código <b>${esc(code)}</b>.</div>`;return}
+    const[ok,msg]=invValida(i);
+    $("q_res").innerHTML=`<div class="card" style="margin-top:12px;text-align:center;border-color:${ok===true?"#9BC9A6":"#E8B4A8"}"><div style="font-weight:700;font-size:15px;color:${ok===true?"var(--ok)":"var(--bad)"}">${ok===true?"✓ Invitación válida":"⚠ "+esc(msg)}</div>
+      <div style="font-size:17px;font-weight:600;margin-top:8px">${esc(i.nombre)}${i.personas>1?" + "+(i.personas-1):""}</div><div class="muted">Invitada por la casa ${esc(i.casa)}</div>
+      <div class="muted" style="margin-top:6px">${i.frecuente?"Frecuente · ":""}${fd(i.desde)}${i.hasta!==i.desde?" a "+fd(i.hasta):""}${i.hora_desde?` · ${i.hora_desde} a ${i.hora_hasta}`:""}${i.placa?" · placa "+esc(i.placa):""}${i.motivo?" · "+esc(i.motivo):""}</div>
+      ${ok!==false?`<button class="btn pri" style="width:100%;margin-top:12px" onclick="entradaInv('${i.id}')">Confirmar entrada</button>`:""}</div>`};
+  $("q_go").onclick=()=>buscar(V("q_code"));$("q_code").onkeydown=e=>{if(e.key==="Enter")buscar(V("q_code"))};
+  $("q_cam").onclick=async()=>{try{await loadScript("https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js");
+    const stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:"environment"}});_scan={stream,stop:false};
+    $("q_vid").innerHTML=`<video id="q_v" playsinline muted style="width:100%;border-radius:12px;background:#000"></video><canvas id="q_c" hidden></canvas>`;
+    const v=$("q_v");v.srcObject=stream;await v.play();const c=$("q_c"),ctx=c.getContext("2d");
+    const tick=()=>{if(!_scan||_scan.stop)return;if(v.readyState===v.HAVE_ENOUGH_DATA){c.width=v.videoWidth;c.height=v.videoHeight;ctx.drawImage(v,0,0);
+      const r=jsQR(ctx.getImageData(0,0,c.width,c.height).data,c.width,c.height);if(r&&r.data){buscar((r.data.match(/INV-[A-Z0-9]+/i)||[r.data])[0]);return}}requestAnimationFrame(tick)};tick()}
+    catch(e){toast(e.message&&/Permission|NotAllowed/i.test(e.name+e.message)?"Permite el acceso a la cámara para escanear.":e.message,1)}}}
+/* ---------- historial ---------- */
+function vhRange(){const s=ST.vh,t=today();if(s.r==="hoy")return[t,t];if(s.r==="7")return[addDays(t,-6),t];if(s.r==="30")return[addDays(t,-29),t];if(s.r==="mes")return[t.slice(0,8)+"01",t];return[s.d1||t,s.d2||t]}
+async function vhBuscar(){const s=ST.vh,[d1,d2]=vhRange();let q=sb.from("visitas").select("*").gte("fecha",d1).lte("fecha",d2).order("ts",{ascending:false}).limit(2000);
+  if(s.casa)q=q.eq("casa",s.casa);if(s.tipo)q=q.eq("tipo",s.tipo);if(s.q){const t=s.q.replace(/[,()%]/g," ").trim();q=q.or(`nombre.ilike.%${t}%,cedula.ilike.%${t}%,placa.ilike.%${t}%`)}
+  busy(true);try{const {data,error}=await q;if(error)throw new Error(trErr(error));s.rows=data.map(normRow);render()}catch(e){toast(e.message,1)}finally{busy(false)}}
+R.vhist=()=>{const s=ST.vh;if(s.rows===null){setTimeout(vhBuscar,0);s.rows=[]}
+  const rows=s.rows;const [d1,d2]=vhRange();
+  return `${!can.g()?`<div class="tabs"><button onclick="VIEW='visit';render()">Garita</button><button class="on">Historial</button></div>`:""}
+  <div class="card"><div class="bar" style="margin:0 0 8px">${[["hoy","Hoy"],["7","7 días"],["30","30 días"],["mes","Este mes"],["r","Rango"]].map(([k,t])=>`<button class="btn sm ${s.r===k?"dark":""}" onclick="ST.vh.r='${k}';${k==="r"?"render()":"vhBuscar()"}">${t}</button>`).join("")}</div>
+   <div class="fg">${s.r==="r"?F("Desde","vh_d1",s.d1||today(),"date")+F("Hasta","vh_d2",s.d2||today(),"date"):""}${F("Buscar nombre, cédula o placa","vh_q",s.q)}${can.p()?"":FS("Casa","vh_c",[["","Todas"]].concat(DB.Casas.map(c=>[c.casa,"Casa "+c.casa])),s.casa)}${FS("Tipo","vh_t",[["","Todos"]].concat(TIPOS_V),s.tipo)}<div class="f"><label>&nbsp;</label><button class="btn pri" id="vh_go" style="width:100%">Buscar</button></div></div></div>
+  <div class="bar"><span class="muted">${fd(d1)}${d2!==d1?" a "+fd(d2):""} · ${rows.length} registro(s)</span><span class="sp"></span>${rows.length?`<button class="btn" onclick="pdfVisitas()">Exportar PDF</button>`:""}</div>
+  <div class="card"><div class="tw"><table class="l"><tr><th>Fecha</th><th>Entrada</th><th>Salida</th><th>Visitante</th><th>Cédula</th><th>Casa</th><th>Tipo</th><th>Estado</th></tr>
+  ${rows.map(v=>`<tr><td>${fd(v.fecha)}</td><td>${hhmm(v.entrada)||"—"}</td><td>${v.salida?hhmm(v.salida)+`<br><span class="muted">${durac(v.entrada,v.salida)}</span>`:v.estado==="Adentro"?badge("Adentro","ok"):"—"}</td><td><b>${esc(v.nombre)}</b>${v.personas>1?` +${v.personas-1}`:""}${v.placa?`<br><span class="muted">${esc(v.placa)}</span>`:""}</td><td>${esc(v.cedula)}</td><td>${v.casa?esc(v.casa):"Adm."}</td><td>${tipoBadge(v.tipo)}</td><td>${v.estado==="Rechazada"||v.estado==="No entró"?badge(v.estado,"bad"):v.estado==="En espera"?badge("En espera","warn"):esc(v.estado)} ${v.autorizacion!=="No consultada"?`<br>${autBadge(v.autorizacion)}`:""}</td></tr>`).join("")||`<tr><td colspan="8" class="empty">Sin visitas en el período</td></tr>`}</table></div></div>`};
+A.vhist=()=>{const s=ST.vh;$("vh_go").onclick=()=>{s.q=V("vh_q");s.casa=$("vh_c")?V("vh_c"):"";s.tipo=V("vh_t");if($("vh_d1")){s.d1=V("vh_d1");s.d2=V("vh_d2")}vhBuscar()};$("vh_q").onkeydown=e=>{if(e.key==="Enter")$("vh_go").click()}};
+function pdfVisitas(){const s=ST.vh,[d1,d2]=vhRange();const rows=s.rows.slice().reverse();
+  const html=doc(dHead("Registro de visitantes")+dId(`${fd(d1)}${d2!==d1?" al "+fd(d2):""}`,`${rows.length} registro(s)${s.casa?" · Casa "+s.casa:""}${s.tipo?" · "+s.tipo:""}`,[["Emitido",fd(today())],["Garita","Principal"]])+
+   dTable("",[{t:"Fecha",w:"11%"},{t:"Entrada",w:"9%"},{t:"Salida",w:"9%"},{t:"Visitante"},{t:"Cédula",w:"14%"},{t:"Casa",w:"7%"},{t:"Tipo",w:"14%"},{t:"Estado",w:"11%"}],
+     rows.map(v=>[fd(v.fecha),hhmm(v.entrada),hhmm(v.salida),esc(v.nombre)+(v.personas>1?` +${v.personas-1}`:"")+(v.placa?` · ${esc(v.placa)}`:""),esc(v.cedula),v.casa?esc(v.casa):"Adm.",esc(v.tipo),esc(v.estado)]))+dFoot("Visitantes "+d1+" a "+d2),1);
+  pdf(html,`Visitantes_${d1}_${d2}`)}
+/* ---------- propietario ---------- */
+R.visitas=()=>{const casa=ME.casa;const pend=DB.Visitas.filter(v=>String(v.casa)===String(casa)&&v.autorizacion==="Pendiente");
+  const invs=DB.Invitaciones.filter(i=>String(i.casa)===String(casa)&&i.estado==="Activa"&&i.hasta>=today()).sort((a,b)=>a.desde.localeCompare(b.desde));
+  const recientes=DB.Visitas.filter(v=>String(v.casa)===String(casa)&&v.autorizacion!=="Pendiente").sort((a,b)=>b.ts.localeCompare(a.ts)).slice(0,15);
+  const nots=DB.Notificaciones.filter(n=>n.tipo!=="autorizacion").slice(0,8);
+  return `${pend.map(v=>`<div class="card" style="border:2px solid var(--warn);background:#FFFBF2"><div style="font-size:12px;color:var(--warn);font-weight:600;letter-spacing:1px">VISITA ESPERANDO EN LA GARITA</div>
+    <div style="font-size:18px;font-weight:600;margin:6px 0 2px">${esc(v.nombre)}${v.personas>1?` <span class="muted">+${v.personas-1}</span>`:""}</div><div class="muted">${esc(v.tipo)}${v.placa?" · placa "+esc(v.placa):""}${v.cedula?" · céd. "+esc(v.cedula):""} · llegó ${hhmm(v.ts)}</div>
+    <div class="grid g2" style="margin-top:12px"><button class="btn" style="background:var(--ok);color:#fff;padding:14px" onclick="responder('${v.id}',true)">✓ Autorizar</button><button class="btn bad" style="padding:14px" onclick="responder('${v.id}',false)">✕ Rechazar</button></div></div>`).join("")}
+  <div class="bar"><button class="btn pri" onclick="formInvitacion()">＋ Pre-autorizar una visita</button><button class="btn" onclick="VIEW='vhist';render()">Historial de mi casa</button></div>
+  <div class="grid g2"><div class="card"><h3>Invitaciones activas</h3>${invs.length?`<table class="l">${invs.map(i=>`<tr><td><b>${esc(i.nombre)}</b>${i.personas>1?` +${i.personas-1}`:""}<br><span class="muted">${i.frecuente?"Frecuente · ":""}${fd(i.desde)}${i.hasta!==i.desde?" a "+fd(i.hasta):""}${i.hora_desde?` · ${i.hora_desde}-${i.hora_hasta}`:""} · ${esc(i.codigo)}</span></td><td class="acts"><button class="btn sm dark" onclick="verInvitacion('${i.id}')">QR</button> <button class="btn sm bad" onclick="cancelInv('${i.id}')">×</button></td></tr>`).join("")}</table>`:`<div class="empty">No tienes invitaciones activas</div>`}</div>
+   <div class="card"><h3>Notificaciones</h3>${miniList(nots.map(n=>[`<b>${esc(n.titulo)}</b><br><span class="muted">${esc(n.cuerpo)}</span>`,`<span class="muted" style="font-size:11px">${new Date(n.ts).toLocaleDateString("es-DO",{day:"numeric",month:"short"})}</span>`,""]))}</div></div>
+  <div class="card"><h3>Visitas recientes a mi casa</h3><div class="tw"><table class="l"><tr><th>Fecha</th><th>Visitante</th><th>Tipo</th><th>Entrada</th><th>Salida</th><th>Estado</th></tr>${recientes.map(v=>`<tr><td>${fd(v.fecha)}</td><td><b>${esc(v.nombre)}</b>${v.placa?`<br><span class="muted">${esc(v.placa)}</span>`:""}</td><td>${tipoBadge(v.tipo)}</td><td>${hhmm(v.entrada)||"—"}</td><td>${hhmm(v.salida)||(v.estado==="Adentro"?badge("Adentro","ok"):"—")}</td><td>${esc(v.estado)}</td></tr>`).join("")||`<tr><td colspan="6" class="empty">Sin visitas recientes</td></tr>`}</table></div></div>`};
+A.visitas=()=>{if(DB.Notificaciones.some(n=>!n.leida&&n.tipo!=="autorizacion"))sb.rpc("marcar_notificaciones_leidas").then(()=>{DB.Notificaciones.forEach(n=>{if(n.tipo!=="autorizacion")n.leida=true});drawBell()})};
+async function responder(id,ok){await wrap(async()=>{const {data,error}=await sb.rpc("responder_visita",{p_id:id,p_autoriza:ok});if(error)throw new Error(trErr(error));
+  const v=DB.Visitas.find(x=>x.id===id);if(v){v.autorizacion=data;if(!ok)v.estado="Rechazada"}DB.Notificaciones.forEach(n=>{if(n.ref_id===id)n.leida=true});toast(ok?"Visita autorizada":"Visita rechazada");drawBell();render()})}
+function formInvitacion(){openModal("Pre-autorizar una visita",`<div class="fg">${F("Nombre del visitante","i_n","","text","","w2")}${F("Personas","i_p","1","number","min=1")}${F("Placa (opcional)","i_pl","","text","autocapitalize='characters'")}
+  ${F("Desde","i_d1",today(),"date")}${F("Hasta","i_d2",today(),"date")}${F("Hora desde (opcional)","i_h1","","time")}${F("Hora hasta","i_h2","","time")}${F("Motivo (opcional)","i_m","","text","","w2")}</div>
+  <label style="display:flex;gap:8px;align-items:center;font-size:13px"><input type="checkbox" id="i_f"> Visitante frecuente (puede entrar todos los días del rango, por ejemplo personal doméstico)</label>`,
+  `<button class="btn" onclick="closeModal()">Cancelar</button><button class="btn pri" id="i_sv">Crear invitación</button>`);
+  $("i_f").onchange=e=>{if(e.target.checked&&V("i_d2")===V("i_d1"))$("i_d2").value=addDays(V("i_d1"),365)};
+  $("i_sv").onclick=()=>wrap(async()=>{if(!V("i_n"))throw new Error("Escribe el nombre.");if((V("i_h1")&&!V("i_h2"))||(!V("i_h1")&&V("i_h2")))throw new Error("Pon las dos horas o ninguna.");
+    const s=await save("Invitaciones",{casa:ME.casa,nombre:V("i_n"),personas:Math.max(1,parseInt(V("i_p"))||1),placa:V("i_pl").toUpperCase(),desde:V("i_d1"),hasta:V("i_d2")||V("i_d1"),hora_desde:V("i_h1"),hora_hasta:V("i_h2"),motivo:V("i_m"),frecuente:$("i_f").checked,estado:"Activa"});
+    render();verInvitacion(s.id)})}
+async function verInvitacion(id){const i=DB.Invitaciones.find(x=>x.id===id);if(!i)return;
+  const txt=`*${C().nombre}*\nHola ${i.nombre}, quedó autorizada tu entrada${i.frecuente?"":` el ${fd(i.desde)}`}${i.hora_desde?` de ${i.hora_desde} a ${i.hora_hasta}`:""} a la casa ${i.casa}.\n\nEn la garita muestra este código: *${i.codigo}*`;
+  openModal("Invitación "+i.codigo,`<div style="text-align:center"><div id="i_qr" style="display:inline-block;padding:10px;background:#fff;border-radius:12px;border:1px solid var(--ln)">Generando QR…</div>
+   <div style="font-size:22px;font-weight:700;letter-spacing:2px;margin-top:8px">${esc(i.codigo)}</div><div class="muted">${esc(i.nombre)}${i.personas>1?" + "+(i.personas-1):""} · ${i.frecuente?"frecuente · ":""}${fd(i.desde)}${i.hasta!==i.desde?" a "+fd(i.hasta):""}${i.hora_desde?` · ${i.hora_desde} a ${i.hora_hasta}`:""}</div>
+   <p class="muted" style="font-size:12px">El visitante muestra el QR o dice el código en la garita.</p></div>`,
+   `<a class="btn" id="i_dl" download="Invitacion_${esc(i.codigo)}.png">Descargar QR</a><a class="btn wa" target="_blank" href="https://wa.me/?text=${encodeURIComponent(txt)}">Enviar por WhatsApp</a>`);
+  try{await loadScript("https://cdnjs.cloudflare.com/ajax/libs/qrcode-generator/1.4.4/qrcode.min.js");const q=qrcode(0,"M");q.addData(i.codigo);q.make();const u=q.createDataURL(7,2);$("i_qr").innerHTML=`<img src="${u}" style="width:200px;height:200px">`;$("i_dl").href=u}
+  catch(e){$("i_qr").textContent="No se pudo generar el QR (sin conexión). Usa el código."}}
+async function cancelInv(id){if(!confirmBox("¿Cancelar esta invitación?"))return;await wrap(async()=>{await save("Invitaciones",{id,estado:"Cancelada"});toast("Invitación cancelada");render()})}
+/* ---------- actualización automática y campana ---------- */
+let _poll=null;
+function drawBell(){const b=$("bell");if(!b)return;if(!can.p()||!DB){b.style.display="none";return}
+  const n=DB.Notificaciones.filter(x=>!x.leida).length;b.style.display="";b.innerHTML=`🔔${n?`<span style="position:absolute;top:-4px;right:-6px;background:var(--bad);color:#fff;border-radius:10px;font-size:10px;padding:1px 5px">${n}</span>`:""}`}
+async function visPoll(){if(_poll)return;_poll=setInterval(async()=>{if(document.hidden||!ME||!DB)return;
+  try{if(can.p()){const [n,v]=await Promise.all([sb.from("notificaciones").select("*").order("ts",{ascending:false}).limit(50),sb.from("visitas").select("*").eq("autorizacion","Pendiente")]);
+      if(n.data){const before=DB.Notificaciones.filter(x=>!x.leida).length;DB.Notificaciones=n.data.map(normRow);const after=DB.Notificaciones.filter(x=>!x.leida).length;
+        if(after>before){const nu=DB.Notificaciones.find(x=>!x.leida);toast("🔔 "+(nu?nu.titulo:"Nueva notificación"));try{navigator.vibrate&&navigator.vibrate([200,100,200])}catch(e){}}}
+      if(v.data)v.data.map(normRow).forEach(r=>putLocal("Visitas",r));drawBell();if(["visitas","micuenta"].includes(VIEW)&&$("modal").hidden)render()}
+    else if(can_g()){const d=addDays(today(),-1);const [v,i]=await Promise.all([sb.from("visitas").select("*").or(`estado.in.("En espera",Adentro),fecha.gte.${d}`).limit(500),sb.from("invitaciones").select("*").eq("estado","Activa").limit(500)]);
+      if(v.data)v.data.map(normRow).forEach(r=>putLocal("Visitas",r));if(i.data)i.data.map(normRow).forEach(r=>putLocal("Invitaciones",r));if(VIEW==="visit"&&$("modal").hidden)render()}}catch(e){}},25000)}
+
+/* =========================================================
    MANTENIMIENTO
    ========================================================= */
 ST.mt={f:"abiertos"};
@@ -1068,7 +1232,7 @@ function formReserva(id,fecha){if(can.p())return formReservaP(id,fecha);const r=
    ========================================================= */
 ST.aj={tab:"datos"};
 R.ajustes=()=>{const c=C(),t=ST.aj.tab;
-  const tabs=[["datos","Datos del residencial"],["cuotas","Cuotas automáticas"],["listas","Listas y caja"],["usuarios","Usuarios"],["importar","Importar datos"],["respaldo","Respaldo"]];
+  const tabs=[["datos","Datos del residencial"],["cuotas","Cuotas automáticas"],["garita","Garita"],["listas","Listas y caja"],["usuarios","Usuarios"],["importar","Importar datos"],["respaldo","Respaldo"]];
   if(!can.a())return `<div class="card"><h3>Tu sesión</h3><p>Usuario: <b>${esc(ME.nombre)}</b> · Rol: ${esc(ME.rol)}</p><p class="muted">Solo el administrador puede cambiar los ajustes.</p></div>`;
   let b="";
   if(t==="datos")b=`<div class="card"><div class="fg">${F("Nombre","a_nombre",c.nombre,"text","","w2")}${F("RNC","a_rnc",c.rnc)}${F("Teléfono","a_telefono",c.telefono)}${F("Correo","a_email",c.email)}${F("Dirección","a_direccion",c.direccion,"text","","w2")}${F("Quien firma","a_firmante",c.firmante)}${F("Cargo","a_cargo",c.cargo)}${F("Cuota mensual por defecto","a_cuota",c.cuota,"number")}${FS("Moneda","a_moneda",["RD$","US$"],c.moneda)}
@@ -1076,6 +1240,10 @@ R.ajustes=()=>{const c=C(),t=ST.aj.tab;
    <div class="grid g2"><div class="f"><label>Firma (PNG fondo transparente)</label><input type="file" id="a_firma_f" accept="image/*"><div style="margin-top:6px">${c.firma?`<img src="${c.firma}" style="max-height:50px"> <a href="#" onclick="clrImg('firma');return false">quitar</a>`:""}</div></div>
    <div class="f"><label>Sello</label><input type="file" id="a_sello_f" accept="image/*"><div style="margin-top:6px">${c.sello?`<img src="${c.sello}" style="max-height:70px"> <a href="#" onclick="clrImg('sello');return false">quitar</a>`:""}</div></div></div>
    <div style="margin-top:14px"><button class="btn pri" onclick="saveCfg(['nombre','rnc','telefono','email','direccion','firmante','cargo','cuota','moneda','datos_pago','legal_ingreso'])">Guardar</button></div></div>`;
+  if(t==="garita")b=`<div class="card"><div class="fg">${FS("Notificar al propietario por la app cada entrada (valor por defecto)","a_notificar_entradas",["Sí","No"],c.notificar_entradas||"Sí","w2")}</div>
+   <div class="sec">WhatsApp automático</div><p class="muted" style="font-size:12.5px">Hoy el aviso por WhatsApp es manual: el guardián toca "Avisar por WhatsApp" y se abre el chat con el mensaje listo. El envío automático (sin tocar nada) requiere conectar WhatsApp Business API, que tiene costo por mensaje. Queda preparado para activarlo más adelante.</p>
+   ${FS("Envío automático por WhatsApp","a_wa_auto",[["No","No (manual)"]],"No","","disabled")}
+   <div style="margin-top:12px"><button class="btn pri" id="a_gsv">Guardar</button></div></div>`;
   if(t==="cuotas")b=`<div class="card"><div class="info">El sistema revisa todos los días a las 6:15 a.m. Si la generación automática está activa y ya llegó el día de generación, crea la cuota del mes para cada casa activa (con su cuota). No duplica: si la cuota del mes ya existe, no la vuelve a crear.</div>
    <div class="fg">${FS("Generar cuotas automáticamente","a_auto_cuotas",["No","Sí"],c.auto_cuotas||"No")}${F("Día del mes en que se genera","a_dia_generacion",c.dia_generacion||"1","number","min=1 max=28")}${F("Día límite de pago","a_dia_vencimiento",c.dia_vencimiento||"10","number","min=1 max=28")}${F("Concepto","a_concepto_cuota",c.concepto_cuota||"Cuota de mantenimiento","text","","w2")}</div>
    <p class="muted" style="font-size:12px">Ejemplo: generar el día 1 con límite el día 10. Del 1 al 10 la cuota aparece como <b>deuda del mes</b>; desde el 11, si no se ha pagado, como <b>en atraso</b>.<br>Última generación automática: <b>${esc(c.ultima_generacion||"todavía no se ha ejecutado")}</b></p>
@@ -1085,7 +1253,7 @@ R.ajustes=()=>{const c=C(),t=ST.aj.tab;
    <button class="btn pri" id="a_lsv">Guardar</button></div>`;
   if(t==="usuarios")b=`<div class="card"><table class="l"><tr><th>Usuario</th><th>Nombre</th><th>Rol</th><th>Casa</th><th>Activo</th><th></th></tr>${DB.Usuarios.slice().sort((a,b)=>(b.rol==="superadmin")-(a.rol==="superadmin")||(a.rol==="propietario")-(b.rol==="propietario")||String(a.casa).localeCompare(String(b.casa),"es",{numeric:true})).map(u=>`<tr><td>${esc(u.usuario)}</td><td>${esc(u.nombre)}</td><td>${u.rol==="superadmin"?badge("super admin","ac"):esc(ROL_TXT[u.rol]||u.rol)}</td><td>${esc(u.casa)}</td><td>${esc(u.activo)}</td><td class="acts">${u.rol==="superadmin"&&!can.s()?"":`<button class="btn sm" onclick="formUser('${u.id}')">Editar</button>`}</td></tr>`).join("")}</table>
    <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap"><button class="btn pri" onclick="formUser()">+ Usuario</button><button class="btn" onclick="crearPropietarios()">Crear usuarios de propietarios</button></div>
-   <p class="muted" style="font-size:12px;margin-top:12px"><b>super admin</b>: todo, y es el único que puede borrar usuarios. <b>admin</b>: todo, incluyendo anular, ajustes y crear usuarios. <b>operador</b>: registra y emite documentos. <b>consulta</b>: ve todo pero no modifica. <b>propietario</b>: solo ve su cuenta, sus recibos, los avisos y solicita reservas.</p></div>`;
+   <p class="muted" style="font-size:12px;margin-top:12px"><b>super admin</b>: todo, y es el único que puede borrar usuarios. <b>admin</b>: todo, incluyendo anular, ajustes y crear usuarios. <b>operador</b>: registra y emite documentos. <b>consulta</b>: ve todo pero no modifica. <b>propietario</b>: ve su cuenta, el panel y estados generales, solicita reservas, reporta incidencias y autoriza visitas. <b>seguridad</b>: solo la garita (registro de visitantes) e incidencias.</p></div>`;
   if(t==="importar")b=`<div class="card"><div class="info">Copia las filas desde Excel o Google Sheets (incluyendo la fila de títulos) y pégalas abajo. Los títulos pueden estar en cualquier orden.</div>
    <div class="fg">${FS("¿Qué vas a importar?","im_t",[["Casas","Casas: casa, propietario, telefono, email, cuota"],["Cargos","Cargos / deudas: casa, periodo, concepto, monto, fecha"],["Pagos","Pagos anteriores: fecha, casa, monto, concepto, periodo, forma, banco, referencia, numero"],["Gastos","Gastos anteriores: fecha, beneficiario, categoria, descripcion, monto, forma, referencia"]],"","w2")}</div>
    <textarea id="im_x" rows="10" placeholder="casa	propietario	telefono	cuota&#10;1	Juan Pérez	8095551234	3500"></textarea>
@@ -1095,6 +1263,7 @@ R.ajustes=()=>{const c=C(),t=ST.aj.tab;
   return `<div class="tabs">${tabs.map(([k,x])=>`<button class="${k===t?"on":""}" onclick="ST.aj.tab='${k}';render()">${x}</button>`).join("")}</div>${b}`};
 A.ajustes=()=>{if(!can.a())return;const t=ST.aj.tab;
   if(t==="datos"){imgInput("a_firma_f","firma");imgInput("a_sello_f","sello")}
+  if(t==="garita")$("a_gsv").onclick=()=>saveCfg(["notificar_entradas"]);
   if(t==="cuotas")$("a_csv").onclick=()=>{const g=+V("a_dia_generacion"),v=+V("a_dia_vencimiento");if(!(g>=1&&g<=28&&v>=1&&v<=28))return toast("Los días deben estar entre 1 y 28.",1);if(v<g)return toast("El día límite no puede ser antes del día de generación.",1);saveCfg(["auto_cuotas","dia_generacion","dia_vencimiento","concepto_cuota"])};
   if(t==="listas")$("a_lsv").onclick=()=>{const keys=["areas","categorias","saldo_inicial","saldo_inicial_fecha"];const extra={};SEQS.forEach(k=>extra["seq_"+k]=V("a_seq_"+k.replace(/-/g,"_")));saveCfg(keys,extra)};
   if(t==="importar"){$("im_pv").onclick=()=>wrap(()=>{const rows=parseImport(V("im_t"),$("im_x").value);ST.imp=rows;
@@ -1108,7 +1277,7 @@ function imgInput(id,key){$(id).onchange=e=>{const f=e.target.files[0];if(!f)ret
   wrap(async()=>{DB.cfg=await api("saveConfig",{cfg:{[key]:d}});toast("Imagen guardada");render()})};im.src=rd.result};rd.readAsDataURL(f)}}
 async function clrImg(k){await wrap(async()=>{DB.cfg=await api("saveConfig",{cfg:{[k]:""}});render()})}
 function formUser(id){const u=id?DB.Usuarios.find(x=>x.id===id):null;const o=u||{rol:"operador",activo:"Sí"};
-  openModal(u?"Editar usuario":"Nuevo usuario",`<div class="fg">${F("Usuario o correo (para entrar)","u_u",o.usuario,"text","autocapitalize='none'")}${F("Nombre que aparece","u_n",o.nombre)}${F(u?"Nueva clave (vacío = no cambiar)":"Clave (mínimo 6)","u_p","","text")}${FS("Rol","u_r",(can.s()?["superadmin"]:[]).concat(["admin","operador","consulta","propietario"]).map(r=>[r,ROL_TXT[r]]),o.rol)}${FS("Casa (solo propietarios)","u_c",casaOpts("—"),o.casa)}${FS("Activo","u_a",["Sí","No"],o.activo)}</div>`,
+  openModal(u?"Editar usuario":"Nuevo usuario",`<div class="fg">${F("Usuario o correo (para entrar)","u_u",o.usuario,"text","autocapitalize='none'")}${F("Nombre que aparece","u_n",o.nombre)}${F(u?"Nueva clave (vacío = no cambiar)":"Clave (mínimo 6)","u_p","","text")}${FS("Rol","u_r",(can.s()?["superadmin"]:[]).concat(["admin","operador","consulta","propietario","seguridad"]).map(r=>[r,ROL_TXT[r]]),o.rol)}${FS("Casa (solo propietarios)","u_c",casaOpts("—"),o.casa)}${FS("Activo","u_a",["Sí","No"],o.activo)}</div>`,
   `${u&&can.s()&&u.id!==ME.id?`<button class="btn bad" id="u_del" style="margin-right:auto">Borrar usuario</button>`:""}<button class="btn" onclick="closeModal()">Cancelar</button><button class="btn pri" id="u_sv">Guardar</button>`);
   if($("u_del"))$("u_del").onclick=()=>wrap(async()=>{if(!confirmBox(`¿Borrar definitivamente el usuario "${u.usuario}"? No podrá volver a entrar.`))return;
     await invokeFn({action:"borrar",id:u.id});DB.Usuarios=DB.Usuarios.filter(x=>x.id!==u.id);toast("Usuario borrado");closeModal();render()});
@@ -1151,7 +1320,7 @@ function parseImport(type,text){
 function showApp(){$("login").hidden=true;$("app").hidden=false;$("meName").textContent=ME.nombre;$("meRol").textContent=(ROL_TXT[ME.rol]||ME.rol)+(ME.casa?" · casa "+ME.casa:"");drawNav()}
 async function enter(){const r=await api("login");ME=r.user;LS.set("lr_me",ME);showApp();
   const cache=LS.get("lr_cache",null);if(cache&&cache._u===ME.id){DB=cache;normalize();render();$("sync").textContent="Actualizando…"}else $("view").innerHTML=`<div class="empty">Cargando datos…</div>`;
-  await loadAll();if(DB){DB._u=ME.id;LS.set("lr_cache",DB)}}
+  await loadAll();if(DB){DB._u=ME.id;LS.set("lr_cache",DB)}drawBell();if(can.p()||can_g())visPoll()}
 async function doLogin(){const u=V("l_user"),pw=$("l_pin").value;if(!u||!pw){$("l_msg").textContent="Escribe usuario y clave.";return}
   $("l_msg").textContent="";busy(true);
   try{const {error}=await sb.auth.signInWithPassword({email:toEmail(u),password:pw});if(error)throw error;LS.set("lr_lastuser",u);await enter()}
@@ -1161,7 +1330,7 @@ async function doBoot(){const nom=V("b_nom"),u=V("b_user"),pw=$("b_pw").value;
   try{busy(true);await invokeFn({action:"bootstrap",nombre:nom,usuario:u,clave:pw});const {error}=await sb.auth.signInWithPassword({email:toEmail(u),password:pw});if(error)throw error;await enter()}
   catch(e){$("l_msg").textContent=trErr(e)}finally{busy(false)}}
 $("l_go").onclick=doLogin;$("l_pin").onkeydown=e=>{if(e.key==="Enter")doLogin()};$("b_go").onclick=doBoot;
-$("logout").onclick=async e=>{e.preventDefault();await sb.auth.signOut().catch(()=>{});LS.del("lr_cache");LS.del("lr_me");location.reload()};
+$("logout").onclick=$("logout2").onclick=async e=>{e.preventDefault();if(!confirmBox("¿Cerrar sesión?"))return;await sb.auth.signOut().catch(()=>{});LS.del("lr_cache");LS.del("lr_me");location.reload()};
 $("reload").onclick=()=>loadAll();
 (async function init(){
   $("l_user").value=LS.get("lr_lastuser","")||"";
